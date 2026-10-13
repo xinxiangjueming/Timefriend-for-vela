@@ -1,0 +1,52 @@
+{
+  "common": {
+    "back": "返回",
+    "yes": "是",
+    "no": "否"
+  },
+  "index": {
+    "pomodoro": "番茄钟",
+    "sync": "手机同步",
+    "settings": "设置"
+  },
+  "pomodoro": {
+    "title": "番茄钟",
+    "workLabel": "投入时间",
+    "restLabel": "休息时间",
+    "loopsLabel": "循环次数",
+    "start": "开始",
+    "round": "第 {cur}/{total} 轮",
+    "workPhase": "投入中",
+    "restPhase": "休息中",
+    "restBtn": "休息",
+    "contBtn": "继续",
+    "exitTitle": "确定退出番茄钟吗？",
+    "done": "已完成 {n} 轮",
+    "today": "今日",
+    "week": "本周",
+    "month": "本月",
+    "workTime": "投入 {n} min",
+    "restTime": "休息 {n} min"
+  },
+  "sync": {
+    "title": "手机同步",
+    "statusIdle": "正在初始化…",
+    "statusNa": "本机不支持互联",
+    "statusO": "等待手机连接",
+    "statusH": "握手中…",
+    "statusReady": "已连接",
+    "statusSent": "已发送，等待手机确认",
+    "statusOk": "已同步",
+    "statusFail": "未连接手机，无法同步",
+    "lastSync": "上次同步：{t}",
+    "syncBtn": "立即同步"
+  },
+  "settings": {
+    "title": "设置",
+    "secScreen": "屏幕",
+    "keepOn": "屏幕常亮",
+    "autoBright": "自动亮度",
+    "brightness": "亮度",
+    "brHint": "自动亮度开启时由环境光决定"
+  }
+}

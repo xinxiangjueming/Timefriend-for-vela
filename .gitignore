@@ -1,0 +1,16 @@
+/.nyc_output
+/coverage
+/node_modules
+/dist
+/build
+/_rpk_check/
+.husky/
+.temp*/
+*.log
+.DS_Store
+Thumbs.db
+# 本地测试工程与编辑器配置（非交付源码，不入远端）
+/tests/
+/.vscode/
+# agent 工作记忆/日志（非项目源码，不入远端）
+.workbuddy/

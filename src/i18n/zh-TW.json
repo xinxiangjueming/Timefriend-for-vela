@@ -1,0 +1,52 @@
+{
+  "common": {
+    "back": "返回",
+    "yes": "是",
+    "no": "否"
+  },
+  "index": {
+    "pomodoro": "番茄鐘",
+    "sync": "手機同步",
+    "settings": "設定"
+  },
+  "pomodoro": {
+    "title": "番茄鐘",
+    "workLabel": "專注時間",
+    "restLabel": "休息時間",
+    "loopsLabel": "循環次數",
+    "start": "開始",
+    "round": "第 {cur}/{total} 輪",
+    "workPhase": "投入中",
+    "restPhase": "休息中",
+    "restBtn": "休息",
+    "contBtn": "繼續",
+    "exitTitle": "確定退出番茄鐘嗎？",
+    "done": "已完成 {n} 輪",
+    "today": "今日",
+    "week": "本週",
+    "month": "本月",
+    "workTime": "投入 {n} 分鐘",
+    "restTime": "休息 {n} 分鐘"
+  },
+  "sync": {
+    "title": "手機同步",
+    "statusIdle": "正在初始化…",
+    "statusNa": "本機不支援互聯",
+    "statusO": "等待手機連線",
+    "statusH": "握手中…",
+    "statusReady": "已連線",
+    "statusSent": "已傳送，等待手機確認",
+    "statusOk": "已同步",
+    "statusFail": "未連線手機，無法同步",
+    "lastSync": "上次同步：{t}",
+    "syncBtn": "立即同步"
+  },
+  "settings": {
+    "title": "設定",
+    "secScreen": "螢幕",
+    "keepOn": "螢幕常亮",
+    "autoBright": "自動亮度",
+    "brightness": "亮度",
+    "brHint": "自動亮度開啟時由環境光決定"
+  }
+}

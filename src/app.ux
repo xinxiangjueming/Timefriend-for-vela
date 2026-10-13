@@ -1,0 +1,11 @@
+<script>
+// Timefriend 应用级入口。当前不承载全局初始化逻辑。
+//
+// 数据同步（手表→手机）的 interconnect 会话实例在 src/common/phoneLink.js
+// 模块加载时即创建（实例早建，跨页面存活），页面只注册/注销各自的消息处理回调。
+// 屏幕常亮（src/common/screenKeep.js）作用域收敛为番茄钟运行态覆盖界面：
+// pomodoro.ux 进入专注/休息倒计时（startPhase）时申请 screenKeepOn()、退出
+// 运行态（回配置态/确认退出/销毁）时撤销 screenKeepOff()；未开启番茄钟时任何
+// 界面不常亮。根页面 index onDestroy 调 screenKeepRestore() 兜底还原。
+export default {}
+</script>

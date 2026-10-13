@@ -1,0 +1,282 @@
+<template>
+  <div class="page">
+    <!-- 屏幕分区：常亮/自动亮度走原生 switch，亮度走原生 slider（口径对齐 Sportlink for Vela）。
+         list-item 内零 if/show——「有/无」一律用「值 + class」表达（官方硬约束），
+         避免 list-item 结构不一致导致 cell 按首帧空态测量后反复重测量。 -->
+    <list class="scroll">
+      <list-item type="head" class="cell cell-head">
+        <text class="page-title">{{ $t('settings.title') }}</text>
+      </list-item>
+
+      <list-item type="screen" class="cell">
+        <div class="card">
+          <text class="sec-label">{{ $t('settings.secScreen') }}</text>
+
+          <div class="row">
+            <text class="row-label">{{ $t('settings.keepOn') }}</text>
+            <switch class="metro-sw" checked="{{ keepOn }}" onchange="onKeepOnSwitch"></switch>
+          </div>
+
+          <div class="row">
+            <text class="row-label">{{ $t('settings.autoBright') }}</text>
+            <switch class="metro-sw" checked="{{ autoBright }}" onchange="onAutoBrightSwitch"></switch>
+          </div>
+
+          <div class="row">
+            <text class="row-label">{{ $t('settings.brightness') }}</text>
+            <text class="row-value">{{ brightnessText }}</text>
+          </div>
+
+          <slider
+            class="br-slider {{ autoBright ? 'br-off' : '' }}"
+            min="0"
+            max="255"
+            step="1"
+            value="{{ brightness }}"
+            onchange="onBrightnessChange"
+          ></slider>
+
+          <text class="hint">{{ $t('settings.brHint') }}</text>
+        </div>
+      </list-item>
+
+      <list-item type="tail" class="cell cell-tail"></list-item>
+    </list>
+  </div>
+</template>
+
+<script>
+import { storeGet, storeSet, storeLoad, storeIsLoaded } from "../../common/store"
+
+// 亮度：滑块走 0~255，行右侧按百分比显示，默认 128（约 50%）。
+// 本页不调 storage / brightness（子页面原生调用会卡死）：设置写进共享数据层，
+// 由返回首页时 index 统一断言生效。
+const BRIGHT_MIN = 0
+const BRIGHT_MAX = 255
+const BRIGHT_DEFAULT = 128
+const SAVE_DEBOUNCE_MS = 300 // 拖动静默窗口：slider change 在拖动过程中连续触发，
+// 若每次都落盘 + 断言屏幕（storage.set + storage.get + 4 次 brightness 原生调用），
+// 一次拖动就是上百次原生/写盘调用，足以拖死手表主线程。改为停手 300ms 后才执行一次。
+
+const LOAD_DELAY_MS = 600 // 进 App 瞬间的敏感窗口（历史卡死实证），补载读盘避开它
+
+let initTk = 0
+let saveTimer = -1
+let storeTimer = -1 // 数据层补载定时器（store 未加载时本页自行读盘）
+
+export default {
+  private: {
+    keepOn: true,
+    autoBright: true,
+    brightness: BRIGHT_DEFAULT,
+    brightnessText: ""
+  },
+
+  onInit() {
+    const tk = ++initTk
+    // 设置来自共享数据层（index 预加载），本页不调 storage / brightness
+    // ——真机结论：子页面调用原生接口会卡死，生效统一交给返回首页时 index 断言。
+    this.loadScreen()
+    this.ensureStoreThenReload(tk)
+  },
+
+  /** 从共享数据层读屏幕设置进 VM（纯内存）。无存档时滑块/文案用默认值。 */
+  loadScreen() {
+    this.applyBrightness(BRIGHT_DEFAULT)
+    const s = storeGet("screen")
+    if (s && typeof s === "object") {
+      if (typeof s.keepOn === "boolean") this.keepOn = s.keepOn
+      if (typeof s.autoBright === "boolean") this.autoBright = s.autoBright
+      if (typeof s.brightness === "number") this.applyBrightness(s.brightness)
+    }
+  },
+
+  /**
+   * 数据层补载（2026-10-14，pomodoro/sync 同款）：进 App 后 600ms 读盘窗口内
+   * 秒进本页时共享层 screen 还是 null → 首屏闪默认亮度/开关。store 未加载时
+   * 延时自行读盘（幂等，多页并发安全），完成后重读 screen。
+   */
+  ensureStoreThenReload(tk) {
+    if (storeIsLoaded()) return
+    if (storeTimer >= 0) clearTimeout(storeTimer)
+    storeTimer = setTimeout(() => {
+      storeTimer = -1
+      if (tk !== initTk) return // 页面已销毁：作废在途回调
+      storeLoad(() => {
+        if (tk !== initTk) return
+        this.loadScreen()
+      })
+    }, LOAD_DELAY_MS)
+  },
+
+  onShow() {
+    // 零原生调用
+  },
+
+  onDestroy() {
+    initTk++
+    if (storeTimer >= 0) {
+      clearTimeout(storeTimer)
+      storeTimer = -1
+    }
+    this.flushSave() // 拖动后立刻退出：补一次落盘，避免最后一段没写进去
+  },
+
+  /** 亮度统一入口：clamp 到 0~255，行右侧按百分比显示 */
+  applyBrightness(v) {
+    const n = Number(v)
+    this.brightness = Math.min(
+      Math.max(isNaN(n) ? BRIGHT_DEFAULT : n, BRIGHT_MIN),
+      BRIGHT_MAX
+    )
+    this.brightnessText = Math.round((this.brightness / BRIGHT_MAX) * 100) + "%"
+  },
+
+  /** 无存档时的滑块初值：不再读系统亮度（子页面调 brightness 会卡死），用默认 128 */
+
+  save() {
+    if (saveTimer >= 0) {
+      clearTimeout(saveTimer)
+      saveTimer = -1
+    }
+    const next = {
+      keepOn: this.keepOn,
+      autoBright: this.autoBright,
+      brightness: this.brightness
+    }
+    storeSet("screen", next) // 落盘 + 更新共享层；屏幕断言交给返回首页时的 index
+  },
+
+  onKeepOnSwitch(e) {
+    this.keepOn = e.checked === true
+    this.save()
+  },
+
+  onAutoBrightSwitch(e) {
+    this.autoBright = e.checked === true
+    this.save()
+  },
+
+  /**
+   * 自动亮度开启时亮度由环境光决定：滑块置灰（br-off）且忽略拖动——Vela slider 无
+   * disabled 通用属性（通用属性仅 id/style/class/for/if/show），只能自行 guard。
+   * 拖动中只更新内存与显示（纯 VM 写，零原生调用），停手 300ms 后才落盘 + 断言一次。
+   */
+  onBrightnessChange(e) {
+    if (this.autoBright) return
+    if (typeof e.progress !== "number") return
+    const v = Math.round(e.progress)
+    if (v === this.brightness) return // 值没变不重复触发（也防 programmatic 回写引起的抖动）
+    this.applyBrightness(v)
+    this.scheduleSave()
+  },
+
+  scheduleSave() {
+    if (saveTimer >= 0) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      saveTimer = -1
+      this.save()
+    }, SAVE_DEBOUNCE_MS)
+  },
+
+  /** 退出页面时补写一次（save 内部会清掉在途的 debounce，不会重复写） */
+  flushSave() {
+    if (saveTimer >= 0) this.save()
+  }
+}
+</script>
+
+<style>
+.page {
+  flex-direction: column;
+  background-color: #000000;
+}
+
+.scroll {
+  flex: 1;
+  width: 480px;
+}
+
+.cell {
+  width: 480px;
+  flex-direction: column;
+  align-items: center;
+}
+
+.cell-head {
+  padding: 58px 0 10px;
+}
+
+.cell-tail {
+  height: 98px;
+}
+
+.page-title {
+  font-size: 33px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.card {
+  width: 398px;
+  flex-direction: column;
+  align-items: center;
+  background-color: #15181e;
+  border-radius: 19px;
+  padding: 21px 27px;
+  margin: 9px 0;
+}
+
+.sec-label {
+  font-size: 25px;
+  color: #8b929b;
+  margin-bottom: 12px;
+}
+
+.row {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  width: 344px;
+  margin: 12px 0;
+}
+
+.row-label {
+  font-size: 27px;
+  color: #ffffff;
+}
+
+.row-value {
+  font-size: 27px;
+  color: #4d9cff;
+}
+
+/* 原生 switch：track-color 为选中态轨道色（宽高由组件自绘） */
+.metro-sw {
+  width: 99px;
+  track-color: #0a84ff;
+}
+
+/* 原生 slider：selected-color 已滑过段、block-color 滑块；br-off 为自动亮度下的置灰态。
+   两个类都是单类，靠声明顺序覆盖（br-off 必须写在 br-slider 之后）——不用复合选择器。 */
+.br-slider {
+  width: 344px;
+  height: 60px;
+  margin-top: 6px;
+  color: #2c2f36;
+  selected-color: #0a84ff;
+  block-color: #ffffff;
+}
+
+.br-off {
+  selected-color: #39414c;
+  block-color: #5c636d;
+}
+
+.hint {
+  font-size: 21px;
+  color: #8b929b;
+  margin: 6px 0 4px;
+  text-align: center;
+}
+</style>

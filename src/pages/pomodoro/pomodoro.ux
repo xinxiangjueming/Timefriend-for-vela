@@ -1,0 +1,781 @@
+<template>
+  <div class="page">
+    <!-- 配置态：投入/休息时长与循环次数选择 + 数据记录 + 同步到手机。
+         圆按钮全部静态展开（onclick 字面量传参），list-item 内零 if/for/show（官方硬约束），
+         选中态只走 class 三元切换 -->
+    <list class="scroll" if="{{ phase === 'config' }}">
+      <list-item type="head" class="cell cell-head">
+        <text class="page-title">{{ $t('pomodoro.title') }}</text>
+      </list-item>
+
+      <list-item type="work" class="cell">
+        <div class="card">
+          <text class="sec-label">{{ $t('pomodoro.workLabel') }}</text>
+          <div class="circ-row">
+            <div
+              class="circ {{ workMin === 15 ? 'circ-on' : '' }}"
+              onclick="onWorkPick(15)"
+            >
+              <text class="circ-txt">15</text>
+            </div>
+            <div
+              class="circ {{ workMin === 30 ? 'circ-on' : '' }}"
+              onclick="onWorkPick(30)"
+            >
+              <text class="circ-txt">30</text>
+            </div>
+          </div>
+          <div class="circ-row">
+            <div
+              class="circ {{ workMin === 40 ? 'circ-on' : '' }}"
+              onclick="onWorkPick(40)"
+            >
+              <text class="circ-txt">40</text>
+            </div>
+            <div
+              class="circ {{ workMin === 60 ? 'circ-on' : '' }}"
+              onclick="onWorkPick(60)"
+            >
+              <text class="circ-txt">60</text>
+            </div>
+          </div>
+        </div>
+      </list-item>
+
+      <list-item type="rest" class="cell">
+        <div class="card">
+          <text class="sec-label">{{ $t('pomodoro.restLabel') }}</text>
+          <div class="circ-row">
+            <div
+              class="circ {{ restMin === 10 ? 'circ-on' : '' }}"
+              onclick="onRestPick(10)"
+            >
+              <text class="circ-txt">10</text>
+            </div>
+            <div
+              class="circ {{ restMin === 15 ? 'circ-on' : '' }}"
+              onclick="onRestPick(15)"
+            >
+              <text class="circ-txt">15</text>
+            </div>
+          </div>
+        </div>
+      </list-item>
+
+      <list-item type="loops" class="cell">
+        <div class="card">
+          <text class="sec-label">{{ $t('pomodoro.loopsLabel') }}</text>
+          <div class="circ-row">
+            <div
+              class="circ-sm {{ loops === 1 ? 'circ-on' : '' }}"
+              onclick="onLoopPick(1)"
+            >
+              <text class="circ-sm-txt">1</text>
+            </div>
+            <div
+              class="circ-sm {{ loops === 2 ? 'circ-on' : '' }}"
+              onclick="onLoopPick(2)"
+            >
+              <text class="circ-sm-txt">2</text>
+            </div>
+            <div
+              class="circ-sm {{ loops === 3 ? 'circ-on' : '' }}"
+              onclick="onLoopPick(3)"
+            >
+              <text class="circ-sm-txt">3</text>
+            </div>
+            <div
+              class="circ-sm {{ loops === 4 ? 'circ-on' : '' }}"
+              onclick="onLoopPick(4)"
+            >
+              <text class="circ-sm-txt">4</text>
+            </div>
+          </div>
+        </div>
+      </list-item>
+
+      <list-item type="start" class="cell">
+        <div class="start-btn" onclick="onStart">
+          <text class="start-txt">{{ $t('pomodoro.start') }}</text>
+        </div>
+      </list-item>
+
+      <!-- 汇总数据与「同步到手机」入口都只在「手机同步」页，本页不重复 -->
+      <list-item type="tail" class="cell cell-tail"></list-item>
+    </list>
+
+    <!-- 运行态：黑屏居中倒计时 / 到期后先震后出按钮 / all-done 完成文案 -->
+    <div class="run-view" if="{{ phase !== 'config' }}">
+      <text class="run-round" if="{{ roundLabel }}">{{ roundLabel }}</text>
+
+      <div class="cd-block" if="{{ isCd }}">
+        <text class="run-cd">{{ cdText }}</text>
+        <text class="run-phase {{ phaseClass }}">{{ phaseLabel }}</text>
+      </div>
+
+      <div class="act-block" if="{{ phase === 'work-done' }}">
+        <div class="big-btn big-rest" onclick="onRestBtn">
+          <text class="big-btn-txt">{{ $t('pomodoro.restBtn') }}</text>
+        </div>
+      </div>
+
+      <div class="act-block" if="{{ phase === 'rest-done' }}">
+        <div class="big-btn big-go" onclick="onContBtn">
+          <text class="big-btn-txt">{{ $t('pomodoro.contBtn') }}</text>
+        </div>
+      </div>
+
+      <text class="done-txt" if="{{ phase === 'all-done' }}">{{ doneLabel }}</text>
+    </div>
+
+    <!-- 退出确认弹窗 -->
+    <div class="dlg-mask" show="{{ dlgShow }}" onclick="onDlgCancel">
+      <div class="dlg-card">
+        <text class="dlg-title">{{ $t('pomodoro.exitTitle') }}</text>
+        <div class="dlg-btn" onclick="onDlgOk">
+          <text class="dlg-btn-txt dlg-yes">{{ $t('common.yes') }}</text>
+        </div>
+        <div class="dlg-divider"></div>
+        <div class="dlg-btn" onclick="onDlgCancel">
+          <text class="dlg-btn-txt dlg-no">{{ $t('common.no') }}</text>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+import router from "@system.router"
+import vibrator from "@system.vibrator"
+import { screenKeepOn, screenKeepOff } from "../../common/screenKeep"
+import { storeGet, storeSet, storeLoad, storeIsLoaded } from "../../common/store"
+
+const CFG_KEY = "timefriend.pomodoro.cfg" // {w,r,n} 上次选择，进页恢复
+const STATS_KEY = "timefriend.pomodoro.stats" // {"YYYY-MM-DD":{w,r}} 单位分钟（本机展示用）
+const SESSIONS_KEY = "timefriend.pomodoro.sessions" // [{date,focusMinutes,restMinutes,createdAt}] 逐条番茄钟周期（同步手机用）
+const KEEP_DAYS = 62 // 统计保留天数（当月+上月）
+const MAX_SESSIONS = 400 // 同步记录上限（超出只留最近）
+const TICK_MS = 1000 // 倒计时轮询粒度（秒级显示；每次按整秒边界对齐下一次唤醒，不空转）
+const VIB_WORK_MS = 3000 // 投入段结束长震时长
+const VIB_REST_MS = 2000 // 休息段结束长震时长
+const DONE_BACK_MS = 3000 // 完成态自动回配置态的展示时长
+const WORK_OPTS = [15, 30, 40, 60]
+const REST_OPTS = [10, 15]
+const LOOP_OPTS = [1, 2, 3, 4]
+
+// 运行链存续令牌：开始新段/确认退出/页面销毁即 ++，迟到回调按令牌校验丢弃
+let runToken = 0
+let curRunTk = 0
+let initTk = 0
+let curRound = 0
+let endAt = 0
+let tickTimer = -1
+let phaseTimer = -1
+let doneTimer = -1
+let statsMap = null
+let sessionsArr = null // 逐条番茄钟周期（同步手机用），进页从 storage 载入
+let vibFallbackTimer = -1
+let vibTaskId = -1
+let storeTimer = -1 // 数据层补载定时器（store 未加载时本页自行读盘）
+
+function dayKeyOf(d) {
+  const p2 = n => ("0" + n).slice(-2)
+  return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate())
+}
+
+function pruneDays(m) {
+  const keys = Object.keys(m).sort()
+  while (keys.length > KEEP_DAYS) delete m[keys.shift()]
+}
+
+function startFallbackVib(n) {
+  if (vibFallbackTimer >= 0) return
+  let c = 0
+  const pulse = () => {
+    if (c >= n) {
+      clearInterval(vibFallbackTimer)
+      vibFallbackTimer = -1
+      return
+    }
+    c++
+    try {
+      vibrator.vibrate({ mode: "long" })
+    } catch (e) {}
+  }
+  pulse()
+  vibFallbackTimer = setInterval(pulse, 1000)
+}
+
+function fireVib(ms, fallbackN) {
+  let ok = false
+  try {
+    vibrator.start({
+      duration: ms,
+      interval: 1000,
+      count: 1,
+      success: d => {
+        if (d && typeof d.id === "number") vibTaskId = d.id
+      },
+      fail: () => startFallbackVib(fallbackN)
+    })
+    ok = true
+  } catch (e) {
+    ok = false
+  }
+  if (!ok) startFallbackVib(fallbackN)
+}
+
+function stopVib() {
+  if (vibFallbackTimer >= 0) {
+    clearInterval(vibFallbackTimer)
+    vibFallbackTimer = -1
+  }
+  if (vibTaskId >= 0) {
+    try {
+      vibrator.stop(vibTaskId)
+    } catch (e) {}
+    vibTaskId = -1
+  }
+}
+
+export default {
+  private: {
+    phase: "config",
+    isCd: false,
+    roundLabel: "",
+    cdText: "",
+    phaseLabel: "",
+    phaseClass: "",
+    doneLabel: "",
+    workMin: 30,
+    restMin: 10,
+    loops: 4,
+    dlgShow: false,
+  },
+
+  onInit() {
+    this.loadCfgThenStats()
+    this.ensureStoreThenReload()
+  },
+
+  onShow() {
+    // 运行态（专注/休息倒计时覆盖界面）：息屏后亮屏会重触发 onShow，按当前
+    // 设置重断言一次常亮（共享数据层零 IO）。子页面调 setKeepScreenOn 真机
+    // 安全（Sportlink for Vela 同页同调用验证过；本项目早期卡死根因是
+    // storage 读不存在的 key，已随 file 版 store 修复）。
+    // 息屏挂起后亮屏补偿：按 endAt 真实时刻立即重算一次
+    if (this.phase === "work-run" || this.phase === "rest-run") {
+      screenKeepOn(storeGet("screen"))
+      this.tick(curRunTk)
+    }
+  },
+
+  onBackPress() {
+    if (this.dlgShow) {
+      this.onDlgCancel()
+      return true
+    }
+    if (this.phase !== "config") {
+      this.dlgShow = true
+      return true
+    }
+    return false
+  },
+
+  onDestroy() {
+    this.teardown()
+  },
+
+
+  /////////////////////////////////////////////////////////////
+  // 配置：点选即时持久化；统计读取与展示
+  /////////////////////////////////////////////////////////////
+
+  /**
+   * 读数据：全部来自共享数据层（由根页面 index 预加载），本页零 IO。
+   * 真机结论：子页面调用 storage 读不存在的 key 会卡死（已随 file 版 store
+   * 修复）；brightness.setKeepScreenOn 子页面调用安全（Sportlink for Vela
+   * 同款验证过），故运行态常亮在本页直接申请。
+   */
+  loadCfgThenStats() {
+    const c = storeGet("cfg")
+    if (c && typeof c === "object") {
+      if (WORK_OPTS.indexOf(c.w) >= 0) this.workMin = c.w
+      if (REST_OPTS.indexOf(c.r) >= 0) this.restMin = c.r
+      if (LOOP_OPTS.indexOf(c.n) >= 0) this.loops = c.n
+    }
+    const m = storeGet("stats")
+    if (m && typeof m === "object" && !Array.isArray(m)) statsMap = m
+    const a = storeGet("sessions")
+    if (Array.isArray(a)) sessionsArr = a
+  },
+
+  /**
+   * 数据层补载（2026-10-14 根因修复）：store 模块被按页面复制（build 实证），
+   * index 的主读盘只填 index 那份副本，本页不读盘则 storeGet 恒 null——
+   * cfg 的跨进程恢复、stats/sessions 的累计全都失效。store 未加载时延时
+   * 600ms 自行读盘（幂等，多页并发安全），完成后重读 cfg/stats/sessions。
+   */
+  ensureStoreThenReload() {
+    if (storeIsLoaded()) return
+    if (storeTimer >= 0) clearTimeout(storeTimer)
+    storeTimer = setTimeout(() => {
+      storeTimer = -1
+      storeLoad(() => {
+        this.loadCfgThenStats()
+      })
+    }, 600)
+  },
+
+  onWorkPick(v) {
+    if (WORK_OPTS.indexOf(v) < 0) return
+    this.workMin = v
+    this.saveCfg()
+  },
+
+  onRestPick(v) {
+    if (REST_OPTS.indexOf(v) < 0) return
+    this.restMin = v
+    this.saveCfg()
+  },
+
+  onLoopPick(v) {
+    if (LOOP_OPTS.indexOf(v) < 0) return
+    this.loops = v
+    this.saveCfg()
+  },
+
+  saveCfg() {
+    storeSet("cfg", { w: this.workMin, r: this.restMin, n: this.loops })
+  },
+
+  /** 一个完整番茄钟周期（专注+休息）结束时记一条，供同步手机 */
+  pushSession(w, r) {
+    if (!sessionsArr) sessionsArr = []
+    sessionsArr.push({
+      date: dayKeyOf(new Date()),
+      focusMinutes: w,
+      restMinutes: r,
+      createdAt: Date.now()
+    })
+    if (sessionsArr.length > MAX_SESSIONS) {
+      sessionsArr = sessionsArr.slice(-MAX_SESSIONS)
+    }
+    storeSet("sessions", sessionsArr)
+  },
+
+  onStart() {
+    if (this.phase !== "config") return
+    curRound = 1
+    this.startPhase("work-run")
+  },
+
+  /** 计算今日/本周/本月统计并写显示字段（本周以周一为首） */
+
+  /** 段完成即记账（到期瞬间记，不等按钮出现） */
+  addStat(wAdd, rAdd) {
+    if (!wAdd && !rAdd) return
+    if (!statsMap) statsMap = {}
+    const day = dayKeyOf(new Date())
+    const d = statsMap[day] || { w: 0, r: 0 }
+    d.w += wAdd
+    d.r += rAdd
+    statsMap[day] = d
+    pruneDays(statsMap)
+    storeSet("stats", statsMap)
+  },
+
+  /////////////////////////////////////////////////////////////
+  // 运行状态机
+  /////////////////////////////////////////////////////////////
+
+  startPhase(p) {
+    const tk = ++runToken
+    curRunTk = tk
+    this.phase = p
+    this.isCd = true
+    this.doneLabel = ""
+    this.phaseLabel = this.$t(p === "work-run" ? "pomodoro.workPhase" : "pomodoro.restPhase")
+    this.phaseClass = p === "work-run" ? "ph-work" : "ph-rest"
+    this.roundLabel = this.$t("pomodoro.round", { cur: curRound, total: this.loops })
+    endAt = Date.now() + (p === "work-run" ? this.workMin : this.restMin) * 60000
+    // 进入倒计时覆盖界面：申请屏幕常亮（按设置执行，默认开；设置页显式关过
+    // keepOn 则不碰系统）。冷启动 600ms 读盘窗口内无存档时按默认开——
+    // 该窗口要求用户进 App 后秒内点完「番茄钟→开始」，实际不可达。
+    screenKeepOn(storeGet("screen"))
+    this.applyCd(endAt - Date.now())
+    this.tick(tk)
+  },
+
+  tick(tk) {
+    if (tk !== runToken) return
+    if (this.phase !== "work-run" && this.phase !== "rest-run") return
+    const remain = endAt - Date.now()
+    if (remain <= 0) {
+      this.onPhaseEnd(tk)
+      return
+    }
+    this.applyCd(remain)
+    if (tickTimer >= 0) clearTimeout(tickTimer)
+    // 对齐到下一个整秒边界再唤醒：既不浪费唤醒次数，也不会漏跳/重复显示同一秒
+    const delay = remain % TICK_MS
+    tickTimer = setTimeout(() => {
+      tickTimer = -1
+      this.tick(tk)
+    }, delay > 0 ? delay : TICK_MS)
+  },
+
+  onPhaseEnd(tk) {
+    if (tk !== runToken) return
+    const isWork = this.phase === "work-run"
+    if (!isWork && this.phase !== "rest-run") return
+    this.applyCd(0)
+    this.phase = isWork ? "work-vib" : "rest-vib"
+    if (isWork) this.addStat(this.workMin, 0)
+    else {
+      this.addStat(0, this.restMin)
+      // 一个完整番茄钟周期结束（专注+休息都完成）→ 记一条，供同步手机
+      this.pushSession(this.workMin, this.restMin)
+    }
+    const vibMs = isWork ? VIB_WORK_MS : VIB_REST_MS
+    fireVib(vibMs, isWork ? 3 : 2)
+    if (phaseTimer >= 0) clearTimeout(phaseTimer)
+    phaseTimer = setTimeout(() => {
+      phaseTimer = -1
+      if (tk !== runToken) return
+      if (isWork) {
+        this.phase = "work-done"
+        this.isCd = false
+      } else if (curRound >= this.loops) {
+        // 最后一轮休息结束：不再出「继续」按钮，震完直接进完成态并自动回配置页
+        //（轮次耗尽判断必须在段结束时就做——原先只在 onContBtn 里判，
+        //  导致最后一轮也得多点一下「继续」才能结束）
+        this.enterAllDone()
+      } else {
+        this.phase = "rest-done"
+        this.isCd = false
+      }
+    }, vibMs)
+  },
+
+  applyCd(remain) {
+    const total = Math.max(0, Math.ceil(remain / 1000))
+    const m = Math.floor(total / 60)
+    const s = total % 60
+    const t = (m < 10 ? "0" + m : "" + m) + ":" + (s < 10 ? "0" + s : "" + s)
+    if (t === this.cdText) return
+    this.cdText = t
+  },
+
+  onRestBtn() {
+    if (this.phase !== "work-done") return
+    this.startPhase("rest-run")
+  },
+
+  onContBtn() {
+    if (this.phase !== "rest-done") return
+    curRound++
+    if (curRound > this.loops) {
+      this.enterAllDone()
+      return
+    }
+    this.startPhase("work-run")
+  },
+
+  enterAllDone() {
+    const tk = ++runToken
+    curRunTk = tk
+    this.phase = "all-done"
+    this.isCd = false
+    this.roundLabel = ""
+    this.cdText = ""
+    this.doneLabel = this.$t("pomodoro.done", { n: this.loops })
+    if (doneTimer >= 0) clearTimeout(doneTimer)
+    doneTimer = setTimeout(() => {
+      doneTimer = -1
+      if (tk !== runToken) return
+      this.backToConfig()
+    }, DONE_BACK_MS)
+  },
+
+  backToConfig() {
+    // 运行态覆盖界面结束（全部完成自动回配置态）：撤销屏幕常亮
+    screenKeepOff()
+    this.phase = "config"
+    this.isCd = false
+    this.roundLabel = ""
+    this.cdText = ""
+    this.doneLabel = ""
+  },
+
+  teardown() {
+    initTk++
+    runToken++
+    curRunTk = runToken
+    curRound = 0
+    endAt = 0
+    if (tickTimer >= 0) {
+      clearTimeout(tickTimer)
+      tickTimer = -1
+    }
+    if (phaseTimer >= 0) {
+      clearTimeout(phaseTimer)
+      phaseTimer = -1
+    }
+    if (doneTimer >= 0) {
+      clearTimeout(doneTimer)
+      doneTimer = -1
+    }
+    if (storeTimer >= 0) {
+      clearTimeout(storeTimer)
+      storeTimer = -1
+    }
+    stopVib()
+    // 退出运行态（确认退出 / 页面销毁，含 App 退出）：撤销屏幕常亮（幂等，
+    // 未申请过则不碰系统）
+    screenKeepOff()
+    statsMap = null // 读盘数据用完释放（模块级承载，不进 viewModel）
+    sessionsArr = null
+  },
+
+  onDlgCancel() {
+    this.dlgShow = false
+  },
+
+  onDlgOk() {
+    this.dlgShow = false
+    this.teardown()
+    router.back()
+  }
+}
+</script>
+
+<style>
+.page {
+  flex-direction: column;
+  background-color: #000000;
+}
+
+.scroll {
+  flex: 1;
+  width: 480px;
+}
+
+.cell {
+  width: 480px;
+  flex-direction: column;
+  align-items: center;
+}
+
+.cell-head {
+  padding: 58px 0 10px;
+}
+
+.cell-tail {
+  height: 98px;
+}
+
+.page-title {
+  font-size: 33px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.card {
+  width: 398px;
+  flex-direction: column;
+  align-items: center;
+  background-color: #15181e;
+  border-radius: 19px;
+  padding: 21px 27px;
+  margin: 9px 0;
+}
+
+.sec-label {
+  font-size: 25px;
+  color: #8b929b;
+  margin-bottom: 8px;
+}
+
+.circ-row {
+  flex-direction: row;
+  justify-content: center;
+  width: 344px;
+}
+
+.circ {
+  width: 130px;
+  height: 130px;
+  border-radius: 65px;
+  background-color: #2c313a;
+  justify-content: center;
+  align-items: center;
+  margin: 12px 15px;
+}
+
+.circ-txt {
+  font-size: 31px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.circ-sm {
+  width: 72px;
+  height: 72px;
+  border-radius: 36px;
+  background-color: #2c313a;
+  justify-content: center;
+  align-items: center;
+  margin: 12px 6px;
+}
+
+.circ-sm-txt {
+  font-size: 27px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.circ-on {
+  background-color: #ff6347;
+}
+
+.start-btn {
+  width: 309px;
+  height: 74px;
+  justify-content: center;
+  align-items: center;
+  border-radius: 37px;
+  background-color: #277af7;
+  margin: 21px 0 9px;
+}
+
+.start-txt {
+  font-size: 27px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.run-view {
+  flex: 1;
+  width: 480px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.run-round {
+  font-size: 25px;
+  color: #8b929b;
+  margin-bottom: 30px;
+}
+
+.cd-block {
+  flex-direction: column;
+  align-items: center;
+}
+
+.run-cd {
+  font-size: 96px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.run-phase {
+  font-size: 27px;
+  margin-top: 20px;
+}
+
+.ph-work {
+  color: #ff6347;
+}
+
+.ph-rest {
+  color: #4a9eff;
+}
+
+.act-block {
+  flex-direction: column;
+  align-items: center;
+}
+
+.big-btn {
+  width: 200px;
+  height: 200px;
+  border-radius: 100px;
+  justify-content: center;
+  align-items: center;
+  margin-top: 40px;
+}
+
+.big-rest {
+  background-color: #ff6347;
+}
+
+.big-go {
+  background-color: #34c759;
+}
+
+.big-btn-txt {
+  font-size: 37px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.done-txt {
+  font-size: 37px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.dlg-mask {
+  position: absolute;
+  left: 0px;
+  top: 0px;
+  width: 480px;
+  height: 480px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.7);
+}
+
+.dlg-card {
+  flex-direction: column;
+  width: 383px;
+  border-radius: 25px;
+  background-color: #1c1c1e;
+  align-items: center;
+}
+
+.dlg-title {
+  margin: 37px 29px 33px;
+  font-size: 31px;
+  color: #ffffff;
+  text-align: center;
+}
+
+.dlg-btn {
+  width: 383px;
+  height: 91px;
+  align-items: center;
+  justify-content: center;
+}
+
+.dlg-divider {
+  width: 383px;
+  height: 2px;
+  background-color: #3a3a3c;
+}
+
+.dlg-btn-txt {
+  font-size: 33px;
+}
+
+.dlg-no {
+  color: #ffffff;
+}
+
+.dlg-yes {
+  color: #f44336;
+}
+</style>

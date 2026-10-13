@@ -1,0 +1,415 @@
+<template>
+  <div class="page">
+    <list class="scroll">
+      <list-item type="head" class="cell cell-head">
+        <text class="page-title">{{ $t('sync.title') }}</text>
+        <text class="status {{ statusCls }}">{{ statusText }}</text>
+      </list-item>
+
+      <list-item type="preview" class="cell">
+        <div class="card">
+          <div class="stat-block">
+            <text class="stat-period">{{ $t('pomodoro.today') }}</text>
+            <div class="stat-lines">
+              <text class="stat-line stat-w">{{ statTodayW }}</text>
+              <text class="stat-line stat-r">{{ statTodayR }}</text>
+            </div>
+          </div>
+          <div class="stat-block">
+            <text class="stat-period">{{ $t('pomodoro.week') }}</text>
+            <div class="stat-lines">
+              <text class="stat-line stat-w">{{ statWeekW }}</text>
+              <text class="stat-line stat-r">{{ statWeekR }}</text>
+            </div>
+          </div>
+          <div class="stat-block">
+            <text class="stat-period">{{ $t('pomodoro.month') }}</text>
+            <div class="stat-lines">
+              <text class="stat-line stat-w">{{ statMonthW }}</text>
+              <text class="stat-line stat-r">{{ statMonthR }}</text>
+            </div>
+          </div>
+
+          <!-- list-item 内不摘节点：「有/无」用「值 + class」表达（v-on/v-off），保持结构一致 -->
+          <text class="last-sync {{ lastSync ? 'v-on' : 'v-off' }}">{{ lastSyncText }}</text>
+        </div>
+      </list-item>
+
+      <list-item type="act" class="cell">
+        <div class="sync-btn" onclick="onSync">
+          <text class="sync-txt">{{ $t('sync.syncBtn') }}</text>
+        </div>
+        <text class="code-line {{ codeText ? 'v-on' : 'v-off' }}">{{ codeText }}</text>
+      </list-item>
+
+      <list-item type="tail" class="cell cell-tail"></list-item>
+    </list>
+  </div>
+</template>
+
+<script>
+import {
+  onPhoneMessage,
+  linkStage,
+  syncPomodoro,
+  ensurePhoneLink
+} from "../../common/phoneLink"
+import { storeGet, storeLoad } from "../../common/store"
+
+// 进页读取链存续令牌
+let initTk = 0
+let statsMap = null // 模块级承载（不进 viewModel，减少数据代理），onDestroy 置 null 释放
+let sessionsArr = null // 逐条番茄钟周期（同步手机用），同上
+let lastClickAt = 0 // 「立即同步」按钮防重复点击（本地发送，节流 1s）
+let linkTimer = -1 // 进页延时建互联实例（早建，接住手机 launchWearApp 触发的会话）
+let loadTimer = -1 // 数据层补载定时器（store 未加载时本页自行读盘）
+let ackTimer = -1 // 「已发送」后等待手机回执的有界定时器
+const LINK_INIT_DELAY_MS = 300 // 进页到建互联实例的延时（避开页面创建敏感窗口）
+const LOAD_DELAY_MS = 600 // 数据层补载延时（index 主读盘同款延时，错开互联初始化）
+const ACK_WAIT_MS = 10000 // 发送后等待手机回执上限（超时显示 (R)=数据无应答）
+
+function dayKeyOf(d) {
+  const p2 = n => ("0" + n).slice(-2)
+  return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate())
+}
+
+function stageText(stage) {
+  if (stage === "idle") return { t: this.$t("sync.statusIdle"), c: "st-warn", code: "" }
+  if (stage === "na") return { t: this.$t("sync.statusNa"), c: "st-bad", code: "" }
+  if (stage === "O") return { t: this.$t("sync.statusO"), c: "st-warn", code: "(O)" }
+  if (stage === "H") return { t: this.$t("sync.statusH"), c: "st-warn", code: "(H)" }
+  return { t: this.$t("sync.statusReady"), c: "st-ok", code: "" }
+}
+
+function summarize(map) {
+  const now = new Date()
+  const p2 = n => ("0" + n).slice(-2)
+  const day = dayKeyOf(now)
+  const weekStart = dayKeyOf(
+    new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7))
+  )
+  const monthStart = now.getFullYear() + "-" + p2(now.getMonth() + 1) + "-01"
+  let tw = 0, tr = 0, ww = 0, wr = 0, mw = 0, mr = 0
+  const m = map || {}
+  for (const k in m) {
+    const d = m[k]
+    if (!d) continue
+    const w = typeof d.w === "number" ? d.w : 0
+    const r = typeof d.r === "number" ? d.r : 0
+    if (k === day) { tw += w; tr += r }
+    if (k >= weekStart && k <= day) { ww += w; wr += r }
+    if (k >= monthStart && k <= day) { mw += w; mr += r }
+  }
+  return {
+    todayW: this.$t("pomodoro.workTime", { n: tw }),
+    todayR: this.$t("pomodoro.restTime", { n: tr }),
+    weekW: this.$t("pomodoro.workTime", { n: ww }),
+    weekR: this.$t("pomodoro.restTime", { n: wr }),
+    monthW: this.$t("pomodoro.workTime", { n: mw }),
+    monthR: this.$t("pomodoro.restTime", { n: mr })
+  }
+}
+
+export default {
+  private: {
+    statusText: "",
+    statusCls: "st-warn",
+    codeText: "",
+    lastSync: 0,
+    lastSyncText: "",
+    statTodayW: "",
+    statTodayR: "",
+    statWeekW: "",
+    statWeekR: "",
+    statMonthW: "",
+    statMonthR: ""
+  },
+
+  onInit() {
+    const tk = ++initTk
+    // 零 IO：数据来自共享数据层（index 预加载）
+    this.loadLocal()
+    this.refreshStatus()
+    // 注册应用层消息回调：手机 req → 自动同步；手机 ok → 标记已同步
+    onPhoneMessage(p => {
+      if (!p || typeof p !== "object") return
+      if (tk !== initTk) return
+      if (p.t === "req") {
+        this.doSync()
+      } else if (p.t === "ok") {
+        this.markSynced()
+      }
+    })
+    // 互联实例【早建】（手册铁律，2026-10-14 修正：原先等按按钮才建，手机侧
+    // launchWearApp 拉起本页建立会话时 onopen 被错过、手机 hs/req 无人接收，
+    // 链路永远停在 (O)，数据发不出去）。延时 300ms 避开页面创建敏感窗口；
+    // 历史卡死确证案例是启动期顶层创建与 storage 读不存在 key，此处均已避开。
+    if (linkTimer >= 0) clearTimeout(linkTimer)
+    linkTimer = setTimeout(() => {
+      linkTimer = -1
+      if (tk !== initTk) return
+      ensurePhoneLink()
+      this.refreshStatus()
+    }, LINK_INIT_DELAY_MS)
+    // 数据层补载（2026-10-14 根因修复）：手机侧 launchWearApp 会【冷启动直达
+    // 本页】，index 的主读盘不会发生；且 store 模块被按页面复制（build 实证），
+    // 不读盘则本页那份 data 恒为 null → 预览卡全 0 min、doSync 发空数组。
+    // store 未加载时本页延时 600ms 自行读盘（幂等，多页并发安全），完成后重读。
+    if (loadTimer >= 0) clearTimeout(loadTimer)
+    loadTimer = setTimeout(() => {
+      loadTimer = -1
+      if (tk !== initTk) return
+      storeLoad(() => {
+        if (tk !== initTk) return
+        this.loadLocal()
+      })
+    }, LOAD_DELAY_MS)
+  },
+
+  onShow() {
+    // 零原生调用：重读共享数据层（纯内存）+ 刷新状态——从番茄钟页返回时
+    // 预览卡能看到刚完成的周期统计
+    this.loadLocal()
+    this.refreshStatus()
+  },
+
+  onDestroy() {
+    initTk++ // 作废在途回调，避免迟到消息继续写 viewModel
+    if (linkTimer >= 0) {
+      clearTimeout(linkTimer)
+      linkTimer = -1
+    }
+    if (loadTimer >= 0) {
+      clearTimeout(loadTimer)
+      loadTimer = -1
+    }
+    if (ackTimer >= 0) {
+      clearTimeout(ackTimer)
+      ackTimer = -1
+    }
+    onPhoneMessage(null) // 只清应用层 handler，不清连接实例
+    statsMap = null // 读盘数据用完释放
+    sessionsArr = null
+  },
+
+  /** 从共享数据层载入统计与逐条周期，并刷新预览卡（纯内存，零 IO） */
+  loadLocal() {
+    const m = storeGet("stats")
+    if (m && typeof m === "object" && !Array.isArray(m)) statsMap = m
+    const a = storeGet("sessions")
+    if (Array.isArray(a)) sessionsArr = a
+    this.applySummary()
+  },
+
+  applySummary() {
+    const s = summarize.call(this, statsMap)
+    this.statTodayW = s.todayW
+    this.statTodayR = s.todayR
+    this.statWeekW = s.weekW
+    this.statWeekR = s.weekR
+    this.statMonthW = s.monthW
+    this.statMonthR = s.monthR
+  },
+
+  refreshStatus() {
+    const st = stageText.call(this, linkStage())
+    this.statusText = st.t
+    this.statusCls = st.c
+    this.codeText = st.code
+  },
+
+  /** 按钮入口：1s 内重复点击直接吞掉（手表误触/连点会重复发同一批数据） */
+  onSync() {
+    const now = Date.now()
+    if (now - lastClickAt < 1000) return
+    lastClickAt = now
+    ensurePhoneLink() // 互联实例在用户点击时才建（进页不建：子页面原生调用会卡死）
+    this.doSync()
+  },
+
+  doSync() {
+    const stage = linkStage()
+    if (stage !== "ready") {
+      // idle/na/O/H：链路未就绪（idle/na=实例未建或创建失败；O/H=手机未
+      // launchWearApp 或握手未过），把断点阶段写进失败码
+      const st = stageText.call(this, stage)
+      this.statusText = this.$t("sync.statusFail")
+      this.statusCls = "st-bad"
+      this.codeText = st.code
+      return
+    }
+    // 发送逐条番茄钟周期（与手机 PomodoroSessionEntity 一一对应）
+    const payload = (sessionsArr && sessionsArr.length) ? sessionsArr : []
+    const sent = syncPomodoro(payload)
+    if (sent) {
+      this.statusText = this.$t("sync.statusSent")
+      this.statusCls = "st-ok"
+      this.codeText = ""
+      // 有界等待手机回执（手册：失败必须有界）：超时显示 (R)=数据已发但对端无应答
+      if (ackTimer >= 0) clearTimeout(ackTimer)
+      const tk = initTk
+      ackTimer = setTimeout(() => {
+        ackTimer = -1
+        if (tk !== initTk) return
+        this.statusText = this.$t("sync.statusFail")
+        this.statusCls = "st-bad"
+        this.codeText = "(R)"
+      }, ACK_WAIT_MS)
+    } else {
+      // 连接中途丢失，回到等待态
+      this.refreshStatus()
+    }
+  },
+
+  /** 从 "投入 N min" 文本里抠回数值（与 phoneLink 解耦，仅用于上报） */
+  minOf(text) {
+    const m = /(\d+)/.exec(text || "")
+    return m ? parseInt(m[1], 10) : 0
+  },
+
+  markSynced() {
+    if (ackTimer >= 0) {
+      clearTimeout(ackTimer)
+      ackTimer = -1
+    }
+    this.lastSync = Date.now()
+    const d = new Date(this.lastSync)
+    const p2 = n => ("0" + n).slice(-2)
+    this.lastSyncText = this.$t("sync.lastSync", {
+      t: p2(d.getMonth() + 1) + "-" + p2(d.getDate()) + " " + p2(d.getHours()) + ":" + p2(d.getMinutes())
+    })
+    this.statusText = this.$t("sync.statusOk")
+    this.statusCls = "st-ok"
+    this.codeText = ""
+  }
+}
+</script>
+
+<style>
+.page {
+  flex-direction: column;
+  background-color: #000000;
+}
+
+.scroll {
+  flex: 1;
+  width: 480px;
+}
+
+.cell {
+  width: 480px;
+  flex-direction: column;
+  align-items: center;
+}
+
+.cell-head {
+  padding: 58px 0 10px;
+}
+
+.cell-tail {
+  height: 98px;
+}
+
+.page-title {
+  font-size: 33px;
+  font-weight: bold;
+  color: #ffffff;
+  margin-bottom: 12px;
+}
+
+.status {
+  font-size: 25px;
+  margin-bottom: 6px;
+}
+
+.st-ok {
+  color: #34c759;
+}
+
+.st-warn {
+  color: #ffc107;
+}
+
+.st-bad {
+  color: #ff6347;
+}
+
+.card {
+  width: 398px;
+  flex-direction: column;
+  align-items: center;
+  background-color: #15181e;
+  border-radius: 19px;
+  padding: 21px 27px;
+  margin: 9px 0;
+}
+
+.stat-block {
+  flex-direction: column;
+  align-items: center;
+  margin-top: 17px;
+}
+
+/* 两行统计值：内部相对左对齐成列，外层 stat-block 居中 → 整体居中、行间齐左 */
+.stat-lines {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.stat-period {
+  font-size: 27px;
+  font-weight: bold;
+  color: #ffc107;
+}
+
+.stat-line {
+  font-size: 25px;
+  margin-top: 6px;
+}
+
+.stat-w {
+  color: #4caf50;
+}
+
+.stat-r {
+  color: #90caf9;
+}
+
+.last-sync {
+  font-size: 22px;
+  color: #8b929b;
+  margin-top: 16px;
+}
+
+.sync-btn {
+  width: 309px;
+  height: 74px;
+  justify-content: center;
+  align-items: center;
+  border-radius: 37px;
+  background-color: #0077be;
+  margin: 18px 0 6px;
+}
+
+.sync-txt {
+  font-size: 27px;
+  font-weight: bold;
+  color: #ffffff;
+}
+
+.code-line {
+  font-size: 22px;
+  color: #ff6347;
+  margin-top: 6px;
+}
+
+/* 显隐：保留节点、只切可见性（list-item 内不摘节点，避免结构变化触发重测量）。
+   两个类都是单类，靠声明顺序覆盖——必须写在 .last-sync / .code-line 之后。 */
+.v-on {
+  visibility: visible;
+}
+
+.v-off {
+  visibility: hidden;
+}
+</style>

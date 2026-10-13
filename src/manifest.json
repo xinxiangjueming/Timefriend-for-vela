@@ -1,0 +1,49 @@
+{
+  "package": "com.example.timefriend",
+  "name": "Timefriend",
+  "versionName": "1.0.0",
+  "versionCode": 1,
+  "minPlatformVersion": 1000,
+  "icon": "/common/logo.png",
+  "deviceTypeList": [
+    "watch"
+  ],
+  "features": [
+    {
+      "name": "system.router"
+    },
+    {
+      "name": "system.file"
+    },
+    {
+      "name": "system.vibrator"
+    },
+    {
+      "name": "system.brightness"
+    },
+    {
+      "name": "system.interconnect"
+    }
+  ],
+  "config": {
+    "logLevel": "log",
+    "designWidth": 480
+  },
+  "router": {
+    "entry": "pages/index",
+    "pages": {
+      "pages/index": {
+        "component": "index"
+      },
+      "pages/pomodoro": {
+        "component": "pomodoro"
+      },
+      "pages/sync": {
+        "component": "sync"
+      },
+      "pages/settings": {
+        "component": "settings"
+      }
+    }
+  }
+}

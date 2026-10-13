@@ -1,0 +1,121 @@
+<template>
+  <div class="page">
+    <list class="scroll">
+      <list-item type="content" class="content">
+        <text class="app-name">Timefriend</text>
+
+        <div class="menu menu-tomato" onclick="goPomodoro">
+          <text class="menu-label">{{ $t('index.pomodoro') }}</text>
+        </div>
+
+        <div class="menu menu-blue" onclick="goSync">
+          <text class="menu-label">{{ $t('index.sync') }}</text>
+        </div>
+
+        <div class="menu menu-seablue" onclick="goSettings">
+          <text class="menu-label">{{ $t('index.settings') }}</text>
+        </div>
+      </list-item>
+    </list>
+  </div>
+</template>
+
+<script>
+import router from "@system.router"
+import { screenBrightnessAssert, screenKeepRestore } from "../../common/screenKeep"
+import { storeLoad, storeGet, storeReset } from "../../common/store"
+
+const LOAD_DELAY_MS = 600 // 首页渲染后再读盘（避开进 App 瞬间的敏感窗口）
+let loadTimer = -1
+
+export default {
+  onShow() {
+    // 不做屏断言：屏幕常亮已收敛到番茄钟运行态（由 pomodoro.ux 的 startPhase
+    // 申请、退出运行态撤销），未开启番茄钟时任何界面不常亮。本页只保留：
+    // 1) 全 App 唯一的读盘点：首页延迟串行读完所有 key，子页面不再碰 IO。
+    // 2) 读盘后仅做亮度断言（返回首页时也会走这里，所以设置页改完能立即生效）。
+    if (loadTimer < 0) {
+      loadTimer = setTimeout(() => {
+        loadTimer = -1
+        storeLoad(() => {
+          screenBrightnessAssert(storeGet("screen"))
+        })
+      }, LOAD_DELAY_MS)
+    }
+  },
+
+  onDestroy() {
+    if (loadTimer >= 0) {
+      clearTimeout(loadTimer)
+      loadTimer = -1
+    }
+    storeReset()
+    // 根页面销毁 = 退出 App：撤销番茄钟可能挂着的常亮 + 按进 App 前原值还原亮度
+    screenKeepRestore()
+  },
+
+  goPomodoro() {
+    router.push({ uri: "/pages/pomodoro" })
+  },
+
+  goSync() {
+    router.push({ uri: "/pages/sync" })
+  },
+
+  goSettings() {
+    router.push({ uri: "/pages/settings" })
+  }
+}
+</script>
+
+<style>
+.page {
+  flex-direction: column;
+  background-color: #000000;
+}
+
+.scroll {
+  flex: 1;
+  width: 480px;
+}
+
+.content {
+  flex-direction: column;
+  align-items: center;
+  width: 480px;
+  padding: 58px 0 74px;
+}
+
+.app-name {
+  font-size: 37px;
+  color: #ffffff;
+  margin-bottom: 58px;
+}
+
+.menu {
+  width: 309px;
+  height: 74px;
+  justify-content: center;
+  align-items: center;
+  margin: 21px 0;
+  background-color: #15181e;
+  border-radius: 37px;
+}
+
+.menu-tomato {
+  background-color: #ff6347;
+}
+
+.menu-blue {
+  background-color: #4d9cff;
+}
+
+.menu-seablue {
+  background-color: #0077be;
+}
+
+.menu-label {
+  font-size: 31px;
+  color: #ffffff;
+}
+</style>

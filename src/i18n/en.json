@@ -1,0 +1,52 @@
+{
+  "common": {
+    "back": "Back",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "index": {
+    "pomodoro": "Pomodoro",
+    "sync": "Phone Sync",
+    "settings": "Settings"
+  },
+  "pomodoro": {
+    "title": "Pomodoro",
+    "workLabel": "Focus time",
+    "restLabel": "Break time",
+    "loopsLabel": "Cycles",
+    "start": "Start",
+    "round": "Round {cur}/{total}",
+    "workPhase": "Focusing",
+    "restPhase": "Resting",
+    "restBtn": "Rest",
+    "contBtn": "Continue",
+    "exitTitle": "Exit Pomodoro?",
+    "done": "Completed {n} rounds",
+    "today": "Today",
+    "week": "This week",
+    "month": "This month",
+    "workTime": "Focus {n} min",
+    "restTime": "Rest {n} min"
+  },
+  "sync": {
+    "title": "Phone Sync",
+    "statusIdle": "Initializing…",
+    "statusNa": "Interconnect not supported",
+    "statusO": "Waiting for phone",
+    "statusH": "Handshaking…",
+    "statusReady": "Connected",
+    "statusSent": "Sent, waiting for confirm",
+    "statusOk": "Synced",
+    "statusFail": "Not connected to phone",
+    "lastSync": "Last sync: {t}",
+    "syncBtn": "Sync now"
+  },
+  "settings": {
+    "title": "Settings",
+    "secScreen": "Screen",
+    "keepOn": "Keep screen on",
+    "autoBright": "Auto brightness",
+    "brightness": "Brightness",
+    "brHint": "Auto brightness follows ambient light"
+  }
+}
