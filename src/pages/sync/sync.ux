@@ -54,7 +54,7 @@ import {
   syncPomodoro,
   ensurePhoneLink
 } from "../../common/phoneLink"
-import { storeGet, storeLoad } from "../../common/store"
+import { storeGet, storeLoad, storeIsLoaded } from "../../common/store"
 
 // 进页读取链存续令牌
 let initTk = 0
@@ -138,6 +138,15 @@ export default {
         this.doSync()
       } else if (p.t === "ok") {
         this.markSynced()
+      } else if (p.t === "err") {
+        // 手机端写库失败（回执带 err）：不置「已同步」，直接显示失败
+        if (ackTimer >= 0) {
+          clearTimeout(ackTimer)
+          ackTimer = -1
+        }
+        this.statusText = this.$t("sync.statusFail")
+        this.statusCls = "st-bad"
+        this.codeText = "(E)"
       }
     })
     // 互联实例【早建】（手册铁律，2026-10-14 修正：原先等按按钮才建，手机侧
@@ -236,6 +245,20 @@ export default {
       this.statusText = this.$t("sync.statusFail")
       this.statusCls = "st-bad"
       this.codeText = st.code
+      return
+    }
+    // 数据层尚未读盘完成 → 先补载再发（2026-10-14 根因修复）：
+    // 手机端 launchWearApp 成功后【立刻】发 hs+req，本页被冷启动拉起时
+    // 600ms 补载还没跑完，sessionsArr 仍是 null → 把空数组当 payload 发出，
+    // 手机端解析为空照样回 ok → 手表显示「已同步」但手机统计里什么都没有。
+    // 这里改为等 storeLoad 完成后重入 doSync（幂等：ready 分支会正常发送）。
+    if (!storeIsLoaded()) {
+      const tk = initTk
+      storeLoad(() => {
+        if (tk !== initTk) return
+        this.loadLocal()
+        this.doSync()
+      })
       return
     }
     // 发送逐条番茄钟周期（与手机 PomodoroSessionEntity 一一对应）
